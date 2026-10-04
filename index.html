@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#172554">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Station Timer</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172033;background:#f3f5f9}
+*{box-sizing:border-box}body{margin:0;padding:0 0 env(safe-area-inset-bottom)}
+header{background:#172554;color:white;padding:22px 18px 18px}
+header h1{margin:0;font-size:22px}header p{margin:5px 0 0;color:#cbd5e1;font-size:13px}
+main{max-width:720px;margin:auto;padding:14px;display:grid;gap:14px}
+.card{background:white;border-radius:16px;padding:16px;box-shadow:0 2px 10px #0f172a0b}
+h2{font-size:17px;margin:0 0 14px}
+label{display:block;font-size:13px;font-weight:650;margin:10px 0 6px;color:#475569}
+input,select,button{font:inherit}input,select{width:100%;min-height:44px;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:white;color:#172033}
+.timegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+button{border:0;border-radius:10px;min-height:42px;padding:9px 12px;font-weight:650;cursor:pointer}
+.primary{background:#2563eb;color:white;width:100%;margin-top:14px}
+.secondary{background:#e8eefc;color:#1d4ed8}
+.danger{background:#fee2e2;color:#b91c1c}
+.station{border:1px solid #e2e8f0;border-radius:12px;padding:12px;margin-top:9px}
+.stationtop{display:flex;gap:8px;align-items:flex-start}
+.stationname{font-weight:750;flex:1;overflow-wrap:anywhere}
+.stationtime{font-size:13px;color:#475569;margin-top:5px}
+.actions{display:flex;gap:5px;flex-wrap:wrap}
+.actions button{min-height:34px;padding:5px 9px;font-size:13px}
+.muted{font-size:12px;color:#64748b;line-height:1.5}
+.settings{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.preview{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;font-size:14px;line-height:1.45;margin-top:10px}
+.group{border-top:1px solid #e2e8f0;padding-top:12px;margin-top:12px}
+.grouphead{display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:700}
+.grouphead button{font-size:13px;min-height:36px}
+.empty{color:#64748b;font-size:14px;padding:12px 0}
+.notice{font-size:12px;color:#64748b;margin-top:10px}
+@media(min-width:600px){main{padding:20px}.timegrid{max-width:480px}}
+</style>
+</head>
+<body>
+<header><h1>Station Timer</h1><p>ステーションの開放時間を管理して、ゲーム用にコピー</p></header>
+<main>
+<section class="card">
+<h2>① ステーション登録・更新</h2>
+<label for="stationName">ステーション名</label>
+<select id="stationName"></select>
+<div id="customWrap" hidden><label for="customName">新しいステーション名</label><input id="customName" maxlength="40" placeholder="例：防衛ステ"></div>
+<label>開放までの残り時間（最大3日）</label>
+<div class="timegrid">
+<div><label for="days">日</label><select id="days"></select></div>
+<div><label for="hours">時間</label><select id="hours"></select></div>
+<div><label for="minutes">分</label><select id="minutes"></select></div>
+</div>
+<div class="muted" id="predicted" style="margin-top:10px"></div>
+<button class="primary" id="saveBtn">登録・更新</button>
+<p class="notice">登録ボタンを押した時点の現在時刻を基準に予定日時を固定します。</p>
+</section>
+<section class="card">
+<h2>② 登録済みステーション</h2>
+<div id="stationList"></div>
+<p class="muted">矢印で一覧の表示順を変更できます。コピー時は開放予定が近い順に自動で並びます。</p>
+</section>
+<section class="card">
+<h2>③ コピー設定</h2>
+<div class="settings">
+<div><label for="dateFilter">UTCの日付で絞り込み</label><select id="dateFilter">
+<option value="today">UTC今日のみ</option><option value="tomorrow">UTC明日のみ</option><option value="2days">UTC今日〜明日</option><option value="3days" selected>UTC今日〜3日目の前日まで</option><option value="all">今後すべて</option>
+</select></div>
+<div><label for="groupSize">1グループの最大件数</label><select id="groupSize"><option>3</option><option selected>4</option><option>5</option></select></div>
+<div><label for="gapHours">近い予定をまとめる間隔</label><select id="gapHours"><option value="3">3時間</option><option value="6" selected>6時間</option><option value="12">12時間</option></select></div>
+</div>
+<div id="copyGroups"></div>
+<p class="muted">1グループ目だけ「Today's Stations」を付けます。日本時間を先に表示し、UTC日付が異なる場合だけUTC側にも日付を表示します。</p>
+</section>
+</main>
+<script>
+const DEFAULT_NAMES=["武器ステ","採集ステ","補給ステ","訓練ステ","建築ステ"];
+const $=id=>document.getElementById(id);
+let stations=[];
+try{stations=JSON.parse(localStorage.getItem("stationTimerStations")||"[]")}catch{stations=[]}
+let names=[];
+try{names=JSON.parse(localStorage.getItem("stationTimerNames")||"null")||DEFAULT_NAMES.slice()}catch{names=DEFAULT_NAMES.slice()}
+const pad=n=>String(n).padStart(2,"0");
+function saveData(){localStorage.setItem("stationTimerStations",JSON.stringify(stations));localStorage.setItem("stationTimerNames",JSON.stringify(names))}
+function fmtJP(ms,withDate=true){const d=new Date(ms);return (withDate?`${pad(d.getMonth()+1)}/${pad(d.getDate())} `:"")+`${pad(d.getHours())}:${pad(d.getMinutes())}`}
+function fmtUTC(ms,withDate=true){const d=new Date(ms);return (withDate?`${pad(d.getUTCMonth()+1)}/${pad(d.getUTCDate())} `:"")+`${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`}
+function utcDay(ms){const d=new Date(ms);return Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())}
+function fillRange(el,max,unit){el.innerHTML="";for(let i=0;i<=max;i++){let o=document.createElement("option");o.value=i;o.textContent=`${i}${unit}`;el.append(o)}}
+fillRange($("days"),3,"日");fillRange($("hours"),23,"時間");fillRange($("minutes"),59,"分");
+function renderNames(){
+ const sel=$("stationName"),prev=sel.value;sel.innerHTML="";
+ names.forEach(n=>{const o=document.createElement("option");o.value=n;o.textContent=n;sel.append(o)});
+ const add=document.createElement("option");add.value="__new__";add.textContent="＋ 新しい名前を追加";sel.append(add);
+ if(names.includes(prev))sel.value=prev;else sel.value=names[0]||"__new__";
+ $("customWrap").hidden=sel.value!=="__new__";
+}
+function durationMs(){return ((+ $("days").value*24 + +$("hours").value)*60 + +$("minutes").value)*60000}
+function renderPrediction(){const ms=Date.now()+durationMs();$("predicted").textContent=`登録すると：${fmtJP(ms)}（${fmtUTC(ms)} UTC）`}
+function renderStations(){
+ const root=$("stationList");root.innerHTML="";
+ if(!stations.length){root.innerHTML='<div class="empty">まだ登録されていません。上でステーションを登録してね。</div>';return}
+ stations.forEach((s,i)=>{
+  const box=document.createElement("div");box.className="station";
+  const top=document.createElement("div");top.className="stationtop";
+  const info=document.createElement("div");info.style.flex="1";
+  const name=document.createElement("div");name.className="stationname";name.textContent="▪️"+s.name;
+  const time=document.createElement("div");time.className="stationtime";time.textContent=`${fmtJP(s.openAt)}（${fmtUTC(s.openAt)} UTC）`;
+  info.append(name,time);top.append(info);
+  const actions=document.createElement("div");actions.className="actions";
+  const up=makeBtn("↑","secondary",()=>{if(i>0){[stations[i-1],stations[i]]=[stations[i],stations[i-1]];saveData();renderAll()}});
+  const down=makeBtn("↓","secondary",()=>{if(i<stations.length-1){[stations[i+1],stations[i]]=[stations[i],stations[i+1]];saveData();renderAll()}});
+  const edit=makeBtn("編集","secondary",()=>{const n=prompt("ステーション名",s.name);if(n===null)return;const clean=n.trim();if(!clean)return;const t=prompt("開放までの残り時間を分で入力（最大4320分）",String(Math.max(0,Math.round((s.openAt-Date.now())/60000))));if(t===null)return;const mins=Number(t);if(!Number.isFinite(mins)||mins<0||mins>4320){alert("0〜4320分で入力してね。");return}if(!names.includes(clean))names.push(clean);s.name=clean;s.openAt=Date.now()+mins*60000;saveData();renderAll()});
+  const del=makeBtn("削除","danger",()=>{if(confirm(`${s.name}を削除する？`)){stations.splice(i,1);saveData();renderAll()}});
+  actions.append(up,down,edit,del);top.append(actions);box.append(top);root.append(box);
+ });
+}
+function makeBtn(text,cls,fn){const b=document.createElement("button");b.textContent=text;b.className=cls;b.addEventListener("click",fn);return b}
+function getFilteredSorted(){
+ const now=Date.now(),today=utcDay(now),tomorrow=today+86400000;
+ let end=Infinity, start=today;
+ switch($("dateFilter").value){case"today":end=today+86400000;break;case"tomorrow":start=tomorrow;end=tomorrow+86400000;break;case"2days":end=today+2*86400000;break;case"3days":end=today+3*86400000;break;case"all":end=Infinity;break}
+ return stations.filter(s=>s.openAt>=now&&utcDay(s.openAt)>=start&&utcDay(s.openAt)<end).slice().sort((a,b)=>a.openAt-b.openAt);
+}
+function buildGroups(items){
+ const max=+$("groupSize").value,gap=+$("gapHours").value*3600000,groups=[];let current=[];
+ for(const s of items){
+  if(current.length&&(current.length>=max||s.openAt-current[current.length-1].openAt>gap)){groups.push(current);current=[]}
+  current.push(s);
+ }
+ if(current.length)groups.push(current);
+ return groups;
+}
+function textForGroup(group,index){
+ const lines=[];if(index===0)lines.push("Today's Stations","");
+ group.forEach(s=>{
+  const jpDate=fmtJP(s.openAt,true),utcDate=fmtUTC(s.openAt,true);
+  const jpKey=new Date(s.openAt).getFullYear()+"-"+new Date(s.openAt).getMonth()+"-"+new Date(s.openAt).getDate();
+  const d=new Date(s.openAt),u=new Date(s.openAt);
+  const same=d.getFullYear()===u.getUTCFullYear()&&d.getMonth()===u.getUTCMonth()&&d.getDate()===u.getUTCDate();
+  const utc=same?fmtUTC(s.openAt,false):fmtUTC(s.openAt,true)+" UTC";
+  lines.push("▪️"+s.name,`${jpDate}（${utc}）`);
+ });
+ return lines.join("\n");
+}
+async function copyText(text,button){
+ try{
+  if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text)}
+  else{const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.opacity="0";document.body.append(ta);ta.focus();ta.select();const ok=document.execCommand("copy");ta.remove();if(!ok)throw new Error("copy failed")}
+  const old=button.textContent;button.textContent="コピーしました ✓";setTimeout(()=>button.textContent=old,1800);
+ }catch(e){
+  const ta=document.createElement("textarea");ta.value=text;ta.style.width="100%";ta.style.minHeight="140px";ta.style.marginTop="8px";
+  const parent=button.parentElement;const old=parent.querySelector("textarea");if(old)old.remove();parent.append(ta);ta.focus();ta.select();
+  button.textContent="下の文章を手動コピー";alert("自動コピーできなかったので、表示された文章を長押ししてコピーしてね。");
+ }
+}
+function renderGroups(){
+ const root=$("copyGroups");root.innerHTML="";const items=getFilteredSorted(),groups=buildGroups(items);
+ if(!groups.length){root.innerHTML='<div class="empty">この条件に合う今後のステーションはありません。</div>';return}
+ groups.forEach((g,i)=>{
+  const wrap=document.createElement("div");wrap.className="group";
+  const head=document.createElement("div");head.className="grouphead";
+  const title=document.createElement("span");title.textContent=`グループ${i+1}（${g.length}件）`;
+  const btn=makeBtn("コピー","secondary",()=>copyText(textForGroup(g,i),btn));head.append(title,btn);
+  const preview=document.createElement("div");preview.className="preview";preview.textContent=textForGroup(g,i);
+  wrap.append(head,preview);root.append(wrap);
+ });
+}
+function renderAll(){renderNames();renderStations();renderGroups();renderPrediction()}
+$("stationName").addEventListener("change",()=>{$("customWrap").hidden=$("stationName").value!=="__new__"});
+["days","hours","minutes"].forEach(id=>$(id).addEventListener("change",renderPrediction));
+["dateFilter","groupSize","gapHours"].forEach(id=>$(id).addEventListener("change",renderGroups));
+$("saveBtn").addEventListener("click",()=>{
+ let name=$("stationName").value;
+ if(name==="__new__"){name=$("customName").value.trim();if(!name){alert("ステーション名を入力してね。");return}if(!names.includes(name))names.push(name)}
+ const openAt=Date.now()+durationMs();
+ const existing=stations.find(s=>s.name===name);
+ if(existing)existing.openAt=openAt;else stations.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),name,openAt});
+ saveData();renderAll();$("stationName").value=name;$("customWrap").hidden=true;$("customName").value="";
+});
+renderAll();
+if("serviceWorker" in navigator && location.protocol.startsWith("http"))window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+</script>
+</body>
+</html>
